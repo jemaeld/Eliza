@@ -21,7 +21,7 @@ import eliza_home
 
 def _pedir_remota(preguntas, root):
     """Pide la carpeta remota: escribiéndola, o Enter para elegirla con ventana."""
-    consola.info("Escribe la ruta (ej. S:\\Control\\...\\[ ELIZA ]  o  \\\\servidor\\carpeta),")
+    consola.info("Escribe la ruta (ej. S:\\carpeta\\ELIZA  o  \\\\servidor\\carpeta),")
     consola.info("o deja vacío y presiona Enter para elegirla con una ventana.")
     ruta = preguntas.preguntar("Carpeta remota")
     if not ruta:

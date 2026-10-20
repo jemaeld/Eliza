@@ -17,6 +17,13 @@ bitácora de turno, ping y monitor de tags Allen-Bradley.
 
 Desde ahí, `Eliza.bat` es el lanzador de todos los días.
 
+**Contraseña de acceso:** antes de arrancar, Eliza pide una contraseña. Sin
+ella no arranca. La primera instalación de todo el sistema la define (se
+escribe dos veces); las demás instalaciones deben escribir la misma. Cada
+equipo la pide una sola vez, y otra vez solo si la contraseña cambia. Se
+guarda en `eliza_config.json` de la carpeta de datos (`vnc_password`), y es
+también la que Eliza escribe en los `.vnc`.
+
 **Repositorio privado:** si GitHub responde que no encuentra el repositorio,
 Eliza.py pide un **token de solo lectura** una vez y lo guarda en
 `eliza_github_token.txt`. El token se crea en GitHub › Settings › Developer
@@ -89,6 +96,7 @@ un repositorio git (usa `git pull`). Los datos locales (`datos\`,
 | `consola.py` | Colores, estilo y preguntas por consola con ESC = cancelar |
 | `eliza_home.py` | Rutas de la instalación y de la carpeta de datos |
 | `settings_terminal.py` | Primer arranque y `/settings` |
+| `licencia.py` | Contraseña de acceso al arrancar |
 | `actualizador.py` | `/update` (usa `Eliza.py` de la raíz) |
 | `config_manager.py` | `eliza_config.json` |
 | `json_db.py` | Lectura/escritura segura de JSON |

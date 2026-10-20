@@ -33,6 +33,7 @@ from prompt_toolkit.formatted_text import HTML
 
 import acd_tools
 import actualizador
+import licencia
 import add_terminal
 import bitacora_terminal
 import bitacora_tools
@@ -240,23 +241,6 @@ def lanzar_vnc(ip, config):
     os.startfile(f.name)
 
 
-def _pedir_password_vnc(ctx):
-    """
-    La contraseña VNC no está en el código (el repositorio la publicaría):
-    se pide una sola vez y se guarda en eliza_config.json de la carpeta de
-    datos (si es remota, queda para todos los equipos).
-    """
-    consola.titulo("Contraseña VNC (solo esta vez)")
-    consola.info("Pega el valor de 'password=' de cualquier archivo .vnc que ya funcione")
-    consola.info("(es el formato cifrado, ej. 00a1b2c3d4e5f6a7). Enter = sin contraseña.")
-    try:
-        valor = consola.Cuestionario().preguntar("password")
-    except consola.Cancelado:
-        return
-    ctx.config = config_manager.actualizar_clave(ctx.base_dir, 'vnc_password', valor)
-    consola.ok("Guardada en eliza_config.json")
-
-
 def ejecutar_entrada(ctx, item):
     data = item['data']
     if item['categoria'] == "VNC":
@@ -267,8 +251,6 @@ def ejecutar_entrada(ctx, item):
         if not ip:
             consola.aviso(f"'{data['name']}' no tiene IP registrada.")
             return
-        if 'vnc_password' not in ctx.config:
-            _pedir_password_vnc(ctx)
         lanzar_vnc(ip, ctx.config)
     else:
         ruta = acd_tools.resolver_ruta_action(data.get('action', ''), ctx.base_dir)
@@ -501,6 +483,13 @@ def main():
     carpeta, aviso = eliza_home.resolver_carpeta_eliza()
     ctx.usar_carpeta(carpeta, externa_no_disponible=bool(aviso))
     avisos = ctx.recargar(silencioso=True)
+    if not licencia.verificar(ctx):
+        try:
+            tk_root.destroy()
+        except tk.TclError:
+            pass
+        return 1
+    limpiar_pantalla()
     mostrar_banner(ctx)
     for a in ([aviso] if aviso else []) + avisos:
         consola.aviso(a)

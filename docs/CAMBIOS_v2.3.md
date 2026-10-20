@@ -38,3 +38,14 @@
   siguiente vuelta (sobrescribir un .bat mientras corre lo corrompe).
 - Repo privado: token de solo lectura, pedido una vez
   (`eliza_github_token.txt` o variable `ELIZA_GITHUB_TOKEN`).
+
+## v2.3.1: contraseña de acceso
+
+- Al arrancar, Eliza pide una contraseña (sin decir para qué es) y no
+  arranca sin ella (3 intentos). Es el `vnc_password` de la carpeta de
+  datos: la primera instalación del sistema la define y las demás deben
+  conocerla. Cada instalación guarda solo una huella sha256 en
+  `eliza_local.json` y no la vuelve a pedir mientras no cambie.
+- Se retiró la pregunta de contraseña al abrir el primer VNC.
+- Limitación: filtra el uso casual. Quien modifique el código o lea
+  `eliza_config.json` puede saltarla.

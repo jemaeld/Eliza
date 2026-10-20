@@ -6,18 +6,18 @@ Fecha: 2026-10-20 · Base: ElizaV2.tar (19 módulos .py, 3 JSON, .bat, .spec)
 
 **Copia tus datos vivos de S: a la carpeta de Eliza.** Hasta ahora Eliza no
 leía la carpeta del proyecto: `eliza_local.json` la mandaba a
-`S:/Control/Internal/ISI/X [ JDRG ]/[ ELIZA ]`. El `config_json/` que venía
+una carpeta de red (unidad S:). El `config_json/` que venía
 en el proyecto es una **copia vieja**: el `acd.json` no tiene `comentario` y
-apunta a OneDrive, sin `_acd_store`.
+apunta a rutas personales, sin `_acd_store`.
 
-Copia desde `S:\...\[ ELIZA ]` a la carpeta de Eliza, reemplazando:
+Copia desde la carpeta de red a la carpeta de Eliza, reemplazando:
 
 - `config_json\` (vnc.json, apps.json, acd.json)
 - `bitacora\`
 - `_acd_store\` (está oculta: activa "mostrar ocultos" o usa `xcopy /h /e`)
 - `eliza_config.json` (si existe)
 
-Las entradas ACD viejas con ruta absoluta a `S:\...\_acd_store\...` siguen
+Las entradas ACD viejas con ruta absoluta a `<carpeta de red>\_acd_store\...` siguen
 funcionando: si esa ruta no existe, Eliza busca el mismo archivo en el
 `_acd_store` local.
 
@@ -25,7 +25,7 @@ funcionando: si esa ruta no existe, Eliza busca el mismo archivo en el
 
 | # | Dependencia | Corrección |
 |---|---|---|
-| D1 | `eliza_local.json` obligaba a usar `S:\...\[ ELIZA ]`. Sin él, preguntaba la carpeta en el primer arranque | La carpeta de datos por defecto es la **carpeta propia de Eliza**. Una carpeta externa ahora es opcional (`/settings`). Si la externa no está disponible, Eliza avisa y sigue con la propia en vez de bloquearse |
+| D1 | `eliza_local.json` obligaba a usar la carpeta de red. Sin él, preguntaba la carpeta en el primer arranque | La carpeta de datos por defecto es la **carpeta propia de Eliza**. Una carpeta externa ahora es opcional (`/settings`). Si la externa no está disponible, Eliza avisa y sigue con la propia en vez de bloquearse |
 | D2 | `eliza2.bat` hacía `call .venv\Scripts\activate.bat` sin `cd` a su carpeta. Fallaba al lanzarlo desde un acceso directo u otra consola. Además, `activate.bat` guarda la ruta donde se creó el venv (p. ej. `...\ELIZA_v2\.venv`): si renombras o copias la carpeta, el venv apunta al lugar viejo | El .bat hace `cd /d "%~dp0"` y usa `.venv\Scripts\python.exe` directo, sin `activate`. Si `.venv` falta o está roto, lo recrea e instala `requirements.txt` |
 | D3 | `/scan_acd` guardaba en `acd.json` la **ruta absoluta** al `_acd_store` (atada a la ubicación de la carpeta de datos) | Las entradas nuevas guardan `open "_acd_store/XXXX.ACD"` (relativa). Las viejas se rescatan como se explica en la sección 1 |
 | D4 | El selector de guardar/cargar de `/logix` empezaba en el directorio de trabajo (variaba según desde dónde se lanzara) | Empieza en la carpeta de datos |
@@ -65,7 +65,7 @@ funcionando: si esa ruta no existe, Eliza busca el mismo archivo en el
 - **Nuevo `consola.py`:** los colores ANSI y el mecanismo de ESC = cancelar estaban copiados en 5 módulos; ahora están en uno solo.
 - **`eliza2.py`:** el `if` gigante de comandos pasó a ser un **registro `COMANDOS`** (nombre → descripción + función). La captura de bitácora se movió a `bitacora_terminal.py`.
 - Imports sin uso eliminados (`subprocess`, `platform`, etc.) y código muerto quitado (`get_acd_version`, `_cargar_json`, `_extraer_ruta_de_action` duplicado). `pyflakes`: 0 advertencias.
-- La contraseña VNC salió del código y pasó a `eliza_config.json` (`vnc_password`, `vnc_puerto`), con el mismo valor por defecto.
+- La contraseña VNC salió del código y pasó a `eliza_config.json` (`vnc_password`, `vnc_puerto`).
 - Docstrings que mencionaban módulos ya eliminados quedaron actualizados.
 
 ## 5. Nuevo

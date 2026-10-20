@@ -91,8 +91,17 @@ def establecer_carpeta(carpeta_externa):
     else:
         carpeta, guardar = carpeta_externa, carpeta_externa
     preparar_estructura(carpeta)
+    # Se conservan las otras claves del archivo (p. ej. la huella de licencia).
+    try:
+        with open(_ruta_puntero(), 'r', encoding='utf-8') as f:
+            datos = json.load(f)
+        if not isinstance(datos, dict):
+            datos = {}
+    except (OSError, json.JSONDecodeError):
+        datos = {}
+    datos['carpeta_eliza'] = guardar
     with open(_ruta_puntero(), 'w', encoding='utf-8') as f:
-        json.dump({'carpeta_eliza': guardar}, f, indent=4, ensure_ascii=False)
+        json.dump(datos, f, indent=4, ensure_ascii=False)
     return carpeta
 
 

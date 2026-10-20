@@ -8,10 +8,9 @@ eliza_config.json vive DENTRO de la carpeta de datos (ver eliza_home.py),
 así que si esa carpeta es compartida, la configuración también.
 
 Claves:
-- vnc_password: contraseña VNC en el formato cifrado de los archivos .vnc
-                (el valor de 'password=' de cualquier .vnc). No está en el
-                código para no publicarla en el repositorio: si falta, Eliza
-                la pregunta la primera vez que se abre un VNC.
+- vnc_password: contraseña VNC en el formato cifrado de los archivos .vnc.
+                Es también la contraseña de acceso a Eliza (ver licencia.py).
+                No está en el código para no publicarla en el repositorio.
 - vnc_puerto:   puerto VNC por defecto.
 
 Claves desconocidas o viejas (p. ej. 'carpeta_destino_acd') se conservan
