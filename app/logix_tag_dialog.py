@@ -39,11 +39,7 @@ class DialogoTag:
         self._programas = []
         self._tags_programa = []
 
-        self.win = tk.Toplevel(padre)
-        self.win.title(f"ELIZA :: logix :: {titulo}")
-        self.win.configure(bg=estilo.BG)
-        self.win.transient(padre)
-        self.win.resizable(False, False)
+        self.win, self._marco_exterior = estilo.ventana_emergente(padre, f"ELIZA :: logix :: {titulo}")
         estilo.configurar_desplegables(self.win)
 
         programa, nombre_tag = logix_tools.separar_ruta(tag)
@@ -63,7 +59,6 @@ class DialogoTag:
 
         self.win.bind('<Return>', lambda e: self._aceptar())
         self.win.bind('<Escape>', lambda e: self._cancelar())
-        self.win.protocol("WM_DELETE_WINDOW", self._cancelar)
 
         self.win.update_idletasks()
         estilo.centrar_ventana(self.win, max(self.win.winfo_reqwidth(), 560), self.win.winfo_reqheight())
@@ -77,7 +72,7 @@ class DialogoTag:
 
     # ---------------------------------------------------------
     def _construir(self, texto_boton):
-        marco = tk.Frame(self.win, bg=estilo.BG, padx=14, pady=12)
+        marco = tk.Frame(self._marco_exterior, bg=estilo.BG)
         marco.pack(fill='both', expand=True)
         marco.columnconfigure(1, weight=1)
 

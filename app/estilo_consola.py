@@ -64,6 +64,23 @@ def aplicar_estilo_base(window, titulo, geometry=None, resizable=True):
     return style
 
 
+def ventana_emergente(padre, titulo):
+    """
+    Ventana emergente con el estilo de Eliza: sin barra de título (como el
+    resto de las pantallas) y con un borde verde para que resalte sobre la
+    ventana principal. Devuelve (toplevel, marco_interior).
+    """
+    win = tk.Toplevel(padre)
+    win.title(titulo)
+    win.overrideredirect(True)
+    win.transient(padre)
+    win.configure(bg=FG)  # el "borde" es el fondo verde que asoma alrededor del marco
+    marco = tk.Frame(win, bg=BG, padx=14, pady=10)
+    marco.pack(fill='both', expand=True, padx=2, pady=2)
+    tk.Label(marco, text=titulo, bg=BG, fg=FG, font=FONT_MONO_BOLD, anchor='w').pack(fill='x', pady=(0, 8))
+    return win, marco
+
+
 def configurar_desplegables(window):
     """Estilo oscuro para ttk.Combobox (campo y lista desplegable)."""
     style = ttk.Style(window)

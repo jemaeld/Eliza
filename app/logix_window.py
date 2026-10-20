@@ -1,46 +1,45 @@
 """
 logix_window.py
 ------------------
-Monitor y forzado de tags Allen-Bradley (Logix) vía pylogix. Ventana GUI
-independiente (Tkinter) porque necesita refrescar continuamente en segundo
-plano sin bloquear la consola.
+/logix: MONITOR DE VARIABLES Allen-Bradley (Logix) vía pylogix, con
+escritura controlada de 1 a N veces.
 
-Cada FILA es una conexión independiente y autocontenida: su propia IP, su
-propio polling rate, su propio hilo de sondeo. Columnas:
+Cada FILA es una conexión independiente: su propia IP, su propio polling y
+su propio hilo de sondeo. Columnas:
 
-    IP | POLLING (ms) | CONECTAR | TAG | VALOR ACTUAL | ESTADO | SOBRESCRIBIR | COMENTARIO
+    CONEX | IP | POLL | TAG | VALOR | ESCRITURA | COMENTARIO
 
-- "+ Agregar tag" y doble clic en la celda TAG abren el asistente de tags
-  (logix_tag_dialog): scope Principal/Subprograma, programa y tag con
-  listas leídas del PLC, sin escribir la ruta Program:X.Y a mano.
-- Doble clic en IP, POLLING, SOBRESCRIBIR o COMENTARIO edita esa celda.
-  Editar IP/POLLING mientras la fila está conectada la reconecta sola con
-  el valor nuevo.
-- Clic (sencillo) en CONECTAR alterna conectar/desconectar esa fila.
-- Un valor en SOBRESCRIBIR fuerza escritura continua en esa fila (pide
-  confirmación, porque escribe sobre un PLC real). Vaciar la celda detiene
-  el forzado.
-- "Guardar registro" exporta las filas actuales (IP, polling, tag,
-  comentario) a un JSON; "Cargar registro" las importa. Los forzados NO se
-  guardan ni se cargan: las filas cargadas llegan desconectadas y sin
-  forzar.
+- CONEX: ● ON / ○ OFF / … conectando / × ERR. Clic para conectar o
+  desconectar. El detalle del error aparece en la barra de estado de abajo
+  al seleccionar la fila.
+- TAG: "+ Agregar" (Ctrl+N) y doble clic en TAG abren el asistente de tags
+  (logix_tag_dialog): scope, programa y tag leídos del PLC.
+- IP, POLL y COMENTARIO se editan con doble clic en la celda. Cambiar la IP
+  de una fila conectada la reconecta.
+- ESCRITURA: "Escribir…" (Ctrl+E) o doble clic en VALOR/ESCRITURA abre la
+  ventana de escritura (logix_escritura): un valor 1..N veces (o continuo)
+  al ritmo del polling de la fila, con indicador IDLE / WORKING / DONE.
+- "Guardar/Cargar registro": IP, polling, tag y comentario en JSON. Las
+  escrituras no se guardan: una fila cargada nunca escribe sola.
 
-Nota de threading: pylogix recomienda NO compartir una instancia de PLC
-entre hilos, así que cada fila crea y usa su propia conexión exclusivamente
-dentro de su propio hilo; la ventana principal nunca la toca directamente.
+Hilos: pylogix no debe compartir una instancia de PLC entre hilos, así que
+cada fila crea su conexión dentro de su hilo. El hilo lee el tag y, si la
+fila tiene una escritura en curso, escribe antes de leer (así la lectura
+muestra el efecto). La GUI solo da órdenes y muestra resultados.
 
-ESC cierra la ventana (desconecta todas las filas primero).
+Esc cierra el monitor (detiene escrituras y desconecta todo).
 """
 
 import json
 import os
 import queue
 import threading
-import time
 import tkinter as tk
+from datetime import datetime
 from tkinter import ttk, messagebox, filedialog
 
 import estilo_consola as estilo
+import logix_escritura
 import logix_explorador
 import logix_tag_dialog
 import logix_tools
@@ -49,17 +48,28 @@ try:
     from pylogix import PLC
     PYLOGIX_DISPONIBLE = True
 except ImportError:
+    PLC = None
     PYLOGIX_DISPONIBLE = False
 
 POLLING_MIN_MS = logix_tools.POLLING_MIN_MS
 POLLING_DEFAULT_MS = logix_tools.POLLING_DEFAULT_MS
 
-COLOR_EXITO = "#00ff00"      # verde: conexión confirmada
-COLOR_ERROR = "#ff5555"      # rojo: no se pudo conectar
-COLOR_PENDIENTE = "#ffcc00"  # ámbar: conectando / advertencia / desconectado
+COLOR_EXITO = "#00ff00"
+COLOR_ERROR = "#ff5555"
+COLOR_PENDIENTE = "#ffcc00"
 
-COLUMNAS = ('ip', 'polling', 'conectar', 'tag', 'valor', 'estado', 'sobrescribir', 'comentario')
-COLUMNAS_EDITABLES = ('ip', 'polling', 'tag', 'sobrescribir', 'comentario')  # doble clic para editar
+CONEX_OFF = "○ OFF"
+CONEX_CONECTANDO = "…"
+CONEX_ON = "● ON"
+CONEX_ERROR = "× ERR"
+
+COLUMNAS = ('conexion', 'ip', 'polling', 'tag', 'valor', 'escritura', 'comentario')
+ENCABEZADOS = {'conexion': 'CONEX', 'ip': 'IP', 'polling': 'POLL', 'tag': 'TAG', 'valor': 'VALOR',
+               'escritura': 'ESCRITURA', 'comentario': 'COMENTARIO'}
+ANCHOS = {'conexion': 70, 'ip': 120, 'polling': 55, 'tag': 340, 'valor': 160, 'escritura': 160,
+          'comentario': 300}
+EDICION_EN_CELDA = ('ip', 'polling', 'comentario')
+ABREN_ESCRITURA = ('valor', 'escritura')
 
 TIPOS_ARCHIVO = [("Registro de tags (JSON)", "*.json"), ("Todos los archivos", "*.*")]
 
@@ -67,110 +77,140 @@ TIPOS_ARCHIVO = [("Registro de tags (JSON)", "*.json"), ("Todos los archivos", "
 class LogixWindow:
     def __init__(self, ip_inicial, root, carpeta_registros=None):
         self.ip_inicial = ip_inicial
-        self.root = root  # raíz de Tkinter compartida por toda la sesión de Eliza
+        self.root = root
 
         self.lock = threading.Lock()
-        self.entradas_por_iid = {}   # iid -> {'ip','polling_ms','tag','comentario','forzar','valor_forzado'}
-        self._hilos_por_iid = {}     # iid -> threading.Thread
-        self._detener_por_iid = {}   # iid -> threading.Event
+        self.entradas_por_iid = {}   # iid -> ver agregar_fila()
+        self._hilos_por_iid = {}
+        self._detener_por_iid = {}
+        self._ventanas_escritura = {}  # iid -> VentanaEscritura
         self._contador_iid = 0
         self._cerrado = False
         self.cola = queue.Queue()
         self.editor_entry = None
         self._after_id = None
-        # Carpeta inicial para Guardar/Cargar registro: la carpeta de datos de
-        # Eliza (antes era el directorio de trabajo, que variaba según desde
-        # dónde se lanzara). Recuerda la última usada durante la sesión.
         self._ultima_carpeta = carpeta_registros or os.getcwd()
-        # Programas/tags leídos del PLC para el asistente (caché por IP en la sesión)
         self.explorador = logix_explorador.ExploradorPLC()
         self._ultima_ip = ip_inicial or ""
 
-        # Toplevel de la raíz compartida, NO un Tk() propio -- crear varias
-        # Tk() en el mismo proceso causa errores de Tcl al cerrarlas.
         self.window = tk.Toplevel(root)
         estilo.aplicar_estilo_base(self.window, "ELIZA :: logix", "1260x560")
         self.window.overrideredirect(True)
         self.window.bind('<Escape>', lambda e: self.cerrar())
+        self.window.bind('<Control-n>', lambda e: self.asistente_agregar())
+        self.window.bind('<Control-e>', lambda e: self.abrir_escritura())
+        self.window.bind('<Delete>', lambda e: self.eliminar_fila())
 
         self._construir_ui()
 
         if not PYLOGIX_DISPONIBLE:
-            messagebox.showerror(
-                "Falta pylogix",
-                "No se encontró la librería 'pylogix'. Instálala con:\n\npip install pylogix",
-                parent=self.window
-            )
+            messagebox.showerror("Falta pylogix",
+                                 "No se encontró la librería 'pylogix'. Instálala con:\n\npip install pylogix",
+                                 parent=self.window)
         elif self.ip_inicial:
-            # /logix <ip>: se abre el asistente ya con esa IP.
             self.window.after(200, self.asistente_agregar)
 
         self._after_id = self.window.after(80, self._procesar_cola)
 
     # ---------------------------------------------------------
     def _construir_ui(self):
-        botones = ttk.Frame(self.window, style="TLabel")
-        botones.pack(fill='x', padx=10, pady=10)
-        ttk.Button(botones, text="+ Agregar tag", command=self.asistente_agregar).pack(side='left')
-        ttk.Button(botones, text="- Eliminar tag", command=self.eliminar_fila).pack(side='left', padx=5)
-        ttk.Button(botones, text="Guardar registro", command=self.guardar_registro).pack(side='left')
-        ttk.Button(botones, text="Cargar registro", command=self.cargar_registro).pack(side='left', padx=5)
-        ttk.Button(botones, text="Detener todos los forzados", command=self.detener_todos_forzados).pack(side='left')
+        barra = ttk.Frame(self.window, style="TLabel")
+        barra.pack(fill='x', padx=10, pady=10)
+        ttk.Label(barra, text="MONITOR DE VARIABLES", font=estilo.FONT_MONO_BOLD).pack(side='left', padx=(0, 16))
+        ttk.Button(barra, text="+ Agregar", command=self.asistente_agregar).pack(side='left')
+        ttk.Button(barra, text="- Eliminar", command=self.eliminar_fila).pack(side='left', padx=5)
+        ttk.Button(barra, text="Escribir…", command=self.abrir_escritura).pack(side='left', padx=(0, 16))
+        ttk.Button(barra, text="Guardar registro", command=self.guardar_registro).pack(side='left')
+        ttk.Button(barra, text="Cargar registro", command=self.cargar_registro).pack(side='left', padx=5)
+        ttk.Button(barra, text="Detener escrituras", command=self.detener_todas_escrituras).pack(side='right')
 
         self.tree = ttk.Treeview(self.window, columns=COLUMNAS, show='headings', selectmode='extended')
-        encabezados = {
-            'ip': 'IP', 'polling': 'POLLING (ms)', 'conectar': 'CONECTAR', 'tag': 'TAG',
-            'valor': 'VALOR ACTUAL', 'estado': 'ESTADO', 'sobrescribir': 'SOBRESCRIBIR',
-            'comentario': 'COMENTARIO',
-        }
-        anchos = {
-            'ip': 130, 'polling': 100, 'conectar': 90, 'tag': 220,
-            'valor': 140, 'estado': 170, 'sobrescribir': 150, 'comentario': 220,
-        }
         for col in COLUMNAS:
-            self.tree.heading(col, text=encabezados[col])
-            self.tree.column(col, width=anchos[col], anchor='w')
-        self.tree.pack(fill='both', expand=True, padx=10, pady=(0, 5))
-        self.tree.tag_configure('forzando', background='#552200', foreground='#ffcc66')
+            self.tree.heading(col, text=ENCABEZADOS[col])
+            self.tree.column(col, width=ANCHOS[col], minwidth=40, anchor='center' if col == 'conexion' else 'w',
+                             stretch=col in ('tag', 'comentario'))
+        self.tree.pack(fill='both', expand=True, padx=10, pady=(0, 4))
         self.tree.tag_configure('conectado', foreground=COLOR_EXITO)
         self.tree.tag_configure('desconectado', foreground=COLOR_PENDIENTE)
+        self.tree.tag_configure('error', foreground=COLOR_ERROR)
+        self.tree.tag_configure('escribiendo', background='#4a3b00', foreground='#ffe066')
 
         self.tree.bind('<Double-1>', self._on_double_click)
         self.tree.bind('<Button-1>', self._on_single_click)
+        self.tree.bind('<<TreeviewSelect>>', lambda e: self._actualizar_barra_estado())
 
-        pie = ttk.Frame(self.window, style="TLabel")
-        pie.pack(fill='x', padx=10, pady=(0, 10))
-        ttk.Label(
-            pie,
-            text="Doble clic en TAG: asistente · en IP/POLLING/SOBRESCRIBIR/COMENTARIO: editar · "
-                 "clic en CONECTAR: conectar/desconectar · Esc cierra"
-        ).pack(side='left')
+        self.var_barra = tk.StringVar()
+        tk.Label(self.window, textvariable=self.var_barra, bg=estilo.ENTRY_BG, fg=estilo.FG_DATA,
+                 font=estilo.FONT_MONO, anchor='w', padx=8, pady=3).pack(fill='x', padx=10)
+        ttk.Label(self.window,
+                  text="Clic en CONEX: conectar/desconectar · Doble clic: TAG asistente · VALOR/ESCRITURA escribir · "
+                       "IP/POLL/COMENTARIO editar · Ctrl+N agregar · Ctrl+E escribir · Supr eliminar · Esc cierra"
+                  ).pack(fill='x', padx=10, pady=(4, 10))
 
     def _siguiente_iid(self):
         self._contador_iid += 1
         return str(self._contador_iid)
 
     # ---------------------------------------------------------
+    # Filas
     def agregar_fila(self, ip="", polling_ms=POLLING_DEFAULT_MS, tag="", comentario=""):
         iid = self._siguiente_iid()
         with self.lock:
             self.entradas_por_iid[iid] = {
                 'ip': ip, 'polling_ms': polling_ms, 'tag': tag, 'comentario': comentario,
-                'forzar': False, 'valor_forzado': '',
+                'trabajo': logix_tools.TrabajoEscritura(),
+                # solo los toca el hilo de la GUI:
+                'valor': '', 'conexion': CONEX_OFF, 'estado_texto': 'Desconectado',
             }
-        self.tree.insert('', 'end', iid=iid, values=(
-            ip, str(polling_ms), 'Conectar', tag, '', 'Desconectado', '', comentario
-        ), tags=('desconectado',))
+        self.tree.insert('', 'end', iid=iid, values=(CONEX_OFF, ip, str(polling_ms), tag, '', '', comentario),
+                         tags=('desconectado',))
         self.tree.selection_set(iid)
         self.tree.see(iid)
         return iid
 
+    def fila(self, iid):
+        """Copia del estado de una fila para las ventanas auxiliares (o None si ya no existe)."""
+        with self.lock:
+            e = self.entradas_por_iid.get(iid)
+            if e is None:
+                return None
+            t = e['trabajo']
+            trabajo = {'estado': t.estado, 'valor_texto': t.valor_texto, 'total': t.total, 'hechas': t.hechas,
+                       'errores': t.errores, 'ultimo_status': t.ultimo_status, 'mensaje': t.mensaje,
+                       'progreso': t.progreso_texto(), 'corrida': t.corrida, 'historial': list(t.historial)}
+            return {'ip': e['ip'], 'tag': e['tag'], 'polling_ms': e['polling_ms'], 'valor': e['valor'],
+                    'conexion': e['conexion'], 'estado_texto': e['estado_texto'], 'trabajo': trabajo}
+
+    def eliminar_fila(self):
+        if self.editor_entry is not None:
+            return  # Supr dentro de una celda en edición no debe borrar la fila
+        for iid in self.tree.selection():
+            self._quitar_fila(iid)
+
+    def _quitar_fila(self, iid):
+        self._desconectar_fila(iid, silencioso=True)
+        with self.lock:
+            self.entradas_por_iid.pop(iid, None)
+        if self.tree.exists(iid):
+            self.tree.delete(iid)
+        ventana = self._ventanas_escritura.pop(iid, None)
+        if ventana:
+            ventana.cerrar()
+
+    def _fila_conectada(self, iid):
+        hilo = self._hilos_por_iid.get(iid)
+        return hilo is not None and hilo.is_alive()
+
+    def _seleccion(self):
+        seleccion = self.tree.selection()
+        return seleccion[0] if seleccion and seleccion[0] in self.entradas_por_iid else None
+
     # ---------------------------------------------------------
     # Asistente de tags
     def _ip_sugerida(self):
-        seleccion = self.tree.selection()
-        if seleccion and seleccion[0] in self.entradas_por_iid:
-            return self.entradas_por_iid[seleccion[0]].get('ip') or self._ultima_ip
+        iid = self._seleccion()
+        if iid:
+            return self.entradas_por_iid[iid].get('ip') or self._ultima_ip
         return self._ultima_ip
 
     def asistente_agregar(self):
@@ -194,60 +234,76 @@ class LogixWindow:
         self._aplicar_edicion(iid, 'tag', datos['tag'])
         self._aplicar_edicion(iid, 'comentario', datos['comentario'])
         if datos['ip'] != entrada.get('ip', ''):
-            self._aplicar_edicion(iid, 'ip', datos['ip'])  # reconecta si estaba conectada
+            self._aplicar_edicion(iid, 'ip', datos['ip'])
 
-    def eliminar_fila(self):
-        seleccion = self.tree.selection()
-        if not seleccion:
+    # ---------------------------------------------------------
+    # Escritura
+    def abrir_escritura(self, iid=None):
+        iid = iid or self._seleccion()
+        if not iid:
+            self.var_barra.set("Selecciona una fila para escribir en su tag.")
             return
-        for iid in seleccion:
-            self._quitar_fila(iid)
+        ventana = self._ventanas_escritura.get(iid)
+        if ventana is not None:
+            ventana.traer_al_frente()
+            return
+        self._ventanas_escritura[iid] = logix_escritura.VentanaEscritura(self, iid)
 
-    def _quitar_fila(self, iid):
-        self._desconectar_fila(iid, silencioso=True)
+    def ventana_escritura_cerrada(self, iid):
+        self._ventanas_escritura.pop(iid, None)
+
+    def iniciar_escritura(self, iid, valor_texto, total):
+        """Lanza ValueError con un mensaje para el usuario si no se puede iniciar."""
+        entrada = self.entradas_por_iid.get(iid)
+        if not entrada:
+            raise ValueError("La fila ya no existe.")
+        if not entrada['tag']:
+            raise ValueError("La fila no tiene tag.")
+        if not entrada['ip']:
+            raise ValueError("La fila no tiene IP.")
         with self.lock:
-            self.entradas_por_iid.pop(iid, None)
-        if self.tree.exists(iid):
-            self.tree.delete(iid)
+            entrada['trabajo'].iniciar(valor_texto, total)
+        if not self._fila_conectada(iid):
+            self._conectar_fila(iid)  # la escritura empieza en cuanto conecte
+        self._refrescar_fila(iid)
 
-    def detener_todos_forzados(self):
+    def detener_escritura(self, iid):
+        with self.lock:
+            entrada = self.entradas_por_iid.get(iid)
+            if entrada:
+                entrada['trabajo'].detener()
+        self._refrescar_fila(iid)
+
+    def reiniciar_escritura(self, iid):
+        with self.lock:
+            entrada = self.entradas_por_iid.get(iid)
+            if entrada:
+                entrada['trabajo'].reiniciar()
+        self._refrescar_fila(iid)
+
+    def detener_todas_escrituras(self):
         with self.lock:
             for entrada in self.entradas_por_iid.values():
-                entrada['forzar'] = False
-                entrada['valor_forzado'] = ''
+                entrada['trabajo'].detener()
         for iid in self.tree.get_children(''):
-            self.tree.set(iid, 'sobrescribir', '')
-            estado_tag = 'conectado' if self._fila_conectada(iid) else 'desconectado'
-            self.tree.item(iid, tags=(estado_tag,))
-
-    def _fila_conectada(self, iid):
-        hilo = self._hilos_por_iid.get(iid)
-        return hilo is not None and hilo.is_alive()
+            self._refrescar_fila(iid)
 
     # ---------------------------------------------------------
     # Guardar / cargar registro de tags (JSON)
     def guardar_registro(self):
-        # Respeta el orden visual de la tabla, no el orden de creación.
         with self.lock:
             filas = [
-                {
-                    'ip': self.entradas_por_iid[iid]['ip'],
-                    'polling_ms': self.entradas_por_iid[iid]['polling_ms'],
-                    'tag': self.entradas_por_iid[iid]['tag'],
-                    'comentario': self.entradas_por_iid[iid].get('comentario', ''),
-                }
-                for iid in self.tree.get_children('')
-                if iid in self.entradas_por_iid
+                {'ip': self.entradas_por_iid[iid]['ip'], 'polling_ms': self.entradas_por_iid[iid]['polling_ms'],
+                 'tag': self.entradas_por_iid[iid]['tag'],
+                 'comentario': self.entradas_por_iid[iid].get('comentario', '')}
+                for iid in self.tree.get_children('') if iid in self.entradas_por_iid
             ]
         if not filas:
             messagebox.showinfo("Sin tags", "No hay filas para guardar.", parent=self.window)
             return
-
         ruta = filedialog.asksaveasfilename(
-            parent=self.window, title="Guardar registro de tags",
-            initialdir=self._ultima_carpeta, initialfile="registro_logix.json",
-            defaultextension=".json", filetypes=TIPOS_ARCHIVO
-        )
+            parent=self.window, title="Guardar registro de tags", initialdir=self._ultima_carpeta,
+            initialfile="registro_logix.json", defaultextension=".json", filetypes=TIPOS_ARCHIVO)
         if not ruta:
             return
         try:
@@ -256,17 +312,13 @@ class LogixWindow:
             messagebox.showerror("Error al guardar", f"No se pudo escribir el archivo:\n{e}", parent=self.window)
             return
         self._ultima_carpeta = os.path.dirname(ruta)
-        messagebox.showinfo(
-            "Registro guardado",
-            f"Se guardaron {n} tag(s) en:\n{ruta}\n\n(Los valores de SOBRESCRIBIR no se guardan.)",
-            parent=self.window
-        )
+        messagebox.showinfo("Registro guardado",
+                            f"Se guardaron {n} tag(s) en:\n{ruta}\n\n(Las escrituras no se guardan.)",
+                            parent=self.window)
 
     def cargar_registro(self):
-        ruta = filedialog.askopenfilename(
-            parent=self.window, title="Cargar registro de tags",
-            initialdir=self._ultima_carpeta, filetypes=TIPOS_ARCHIVO
-        )
+        ruta = filedialog.askopenfilename(parent=self.window, title="Cargar registro de tags",
+                                          initialdir=self._ultima_carpeta, filetypes=TIPOS_ARCHIVO)
         if not ruta:
             return
         try:
@@ -275,47 +327,43 @@ class LogixWindow:
             messagebox.showerror("Error al cargar", f"No se pudo leer el registro:\n{e}", parent=self.window)
             return
         self._ultima_carpeta = os.path.dirname(ruta)
-
         if not filas:
             messagebox.showinfo("Registro vacío", "El archivo no contiene tags.", parent=self.window)
             return
-
-        # Si ya hay filas, preguntar si se reemplazan o se agregan al final.
         if self.tree.get_children(''):
             respuesta = messagebox.askyesnocancel(
                 "Cargar registro",
                 f"El registro tiene {len(filas)} tag(s).\n\n"
-                "Sí = REEMPLAZAR las filas actuales (se desconectan y se detienen sus forzados)\n"
+                "Sí = REEMPLAZAR las filas actuales (se desconectan y se detienen sus escrituras)\n"
                 "No = AGREGAR al final de las actuales\n"
                 "Cancelar = no hacer nada",
-                parent=self.window
-            )
+                parent=self.window)
             if respuesta is None:
                 return
             if respuesta:
                 for iid in list(self.tree.get_children('')):
                     self._quitar_fila(iid)
-
         for fila in filas:
-            self.agregar_fila(
-                ip=fila['ip'], polling_ms=fila['polling_ms'],
-                tag=fila['tag'], comentario=fila['comentario']
-            )
+            self.agregar_fila(ip=fila['ip'], polling_ms=fila['polling_ms'], tag=fila['tag'],
+                              comentario=fila['comentario'])
 
     # ---------------------------------------------------------
-    # Clic sencillo en CONECTAR alterna esa fila; el resto de columnas no hace nada aquí
-    def _on_single_click(self, event):
-        region = self.tree.identify('region', event.x, event.y)
-        if region != 'cell':
-            return
+    # Clics
+    def _columna_en(self, event):
+        if self.tree.identify('region', event.x, event.y) != 'cell':
+            return None, None
         row_id = self.tree.identify_row(event.y)
         col_id = self.tree.identify_column(event.x)
         if not row_id or not col_id:
-            return
-        col_index = int(col_id.replace('#', '')) - 1
-        if col_index < 0 or col_index >= len(COLUMNAS):
-            return
-        if COLUMNAS[col_index] == 'conectar':
+            return None, None
+        indice = int(col_id.replace('#', '')) - 1
+        if indice < 0 or indice >= len(COLUMNAS):
+            return None, None
+        return row_id, COLUMNAS[indice]
+
+    def _on_single_click(self, event):
+        row_id, clave = self._columna_en(event)
+        if clave == 'conexion':
             self._alternar_conexion(row_id)
 
     def _alternar_conexion(self, iid):
@@ -324,52 +372,41 @@ class LogixWindow:
         else:
             self._conectar_fila(iid)
 
-    # ---------------------------------------------------------
-    # Edición inline (ip, polling, tag, sobrescribir, comentario) -- mismo patrón que edit_window.py
     def _on_double_click(self, event):
         if self.editor_entry is not None:
             return
-        region = self.tree.identify('region', event.x, event.y)
-        if region != 'cell':
+        row_id, clave = self._columna_en(event)
+        if not row_id:
             return
-        row_id = self.tree.identify_row(event.y)
-        col_id = self.tree.identify_column(event.x)
-        if not row_id or not col_id:
-            return
-
-        col_index = int(col_id.replace('#', '')) - 1
-        if col_index < 0 or col_index >= len(COLUMNAS):
-            return
-        clave = COLUMNAS[col_index]
         if clave == 'tag':
             self.asistente_editar(row_id)
-            return
-        if clave not in COLUMNAS_EDITABLES:
-            return  # 'valor', 'estado' y 'conectar' no se editan escribiendo
+        elif clave in ABREN_ESCRITURA:
+            self.abrir_escritura(row_id)
+        elif clave in EDICION_EN_CELDA:
+            self._editar_en_celda(row_id, clave)
 
-        bbox = self.tree.bbox(row_id, col_id)
+    def _editar_en_celda(self, row_id, clave):
+        bbox = self.tree.bbox(row_id, clave)
         if not bbox:
             return
         x, y, ancho, alto = bbox
-        valor_actual = self.tree.set(row_id, col_id)
-
-        self.editor_entry = tk.Entry(
-            self.tree, bg=estilo.ENTRY_BG, fg=estilo.FG_DATA,
-            insertbackground=estilo.FG, font=estilo.FONT_MONO, borderwidth=1
-        )
-        self.editor_entry.insert(0, valor_actual)
+        self.editor_entry = tk.Entry(self.tree, bg=estilo.ENTRY_BG, fg=estilo.FG_DATA, insertbackground=estilo.FG,
+                                     font=estilo.FONT_MONO, borderwidth=1)
+        self.editor_entry.insert(0, self.tree.set(row_id, clave))
         self.editor_entry.select_range(0, tk.END)
         self.editor_entry.focus()
-        self.editor_entry.place(x=x, y=y, width=ancho, height=alto)
+        self.editor_entry.place(x=x, y=y, width=max(ancho, 120), height=alto)
 
         def confirmar(_event=None):
+            if self.editor_entry is None:
+                return
             nuevo_valor = self.editor_entry.get().strip()
             self._cerrar_editor_celda()
             self._aplicar_edicion(row_id, clave, nuevo_valor)
 
         def cancelar(_event=None):
             self._cerrar_editor_celda()
-            return 'break'  # evita que este ESC también dispare el cierre de la ventana
+            return 'break'
 
         self.editor_entry.bind('<Return>', confirmar)
         self.editor_entry.bind('<FocusOut>', confirmar)
@@ -377,21 +414,12 @@ class LogixWindow:
 
     def _cerrar_editor_celda(self):
         if self.editor_entry is not None:
-            self.editor_entry.destroy()
-            self.editor_entry = None
+            entry, self.editor_entry = self.editor_entry, None
+            entry.destroy()
 
     def _aplicar_edicion(self, row_id, clave, nuevo_valor):
         if row_id not in self.entradas_por_iid:
             return
-
-        if clave == 'ip':
-            with self.lock:
-                self.entradas_por_iid[row_id]['ip'] = nuevo_valor
-            self.tree.set(row_id, 'ip', nuevo_valor)
-            if self._fila_conectada(row_id):
-                self._conectar_fila(row_id)  # reconecta sola con la IP nueva
-            return
-
         if clave == 'polling':
             try:
                 polling = int(nuevo_valor)
@@ -401,82 +429,36 @@ class LogixWindow:
                 messagebox.showwarning(
                     "Polling muy rápido",
                     f"El mínimo permitido es {POLLING_MIN_MS} ms (para no saturar el PLC/la red). Se ajustó.",
-                    parent=self.window
-                )
+                    parent=self.window)
                 polling = POLLING_MIN_MS
-            with self.lock:
-                self.entradas_por_iid[row_id]['polling_ms'] = polling
-            self.tree.set(row_id, 'polling', str(polling))
-            # No hace falta reconectar: el hilo relee polling_ms en cada ciclo.
-            return
-
-        if clave == 'tag':
-            with self.lock:
-                self.entradas_por_iid[row_id]['tag'] = nuevo_valor
-            self.tree.set(row_id, 'tag', nuevo_valor)
-            return
-
-        if clave == 'comentario':
-            # Solo informativo: no afecta conexión ni sondeo.
-            with self.lock:
-                self.entradas_por_iid[row_id]['comentario'] = nuevo_valor
-            self.tree.set(row_id, 'comentario', nuevo_valor)
-            return
-
-        # clave == 'sobrescribir'
-        if not nuevo_valor:
-            with self.lock:
-                self.entradas_por_iid[row_id]['forzar'] = False
-                self.entradas_por_iid[row_id]['valor_forzado'] = ''
-            self.tree.set(row_id, 'sobrescribir', '')
-            estado_tag = 'conectado' if self._fila_conectada(row_id) else 'desconectado'
-            self.tree.item(row_id, tags=(estado_tag,))
-            return
-
-        tag_actual = self.entradas_por_iid.get(row_id, {}).get('tag') or '(sin nombre)'
-        polling_actual = self.entradas_por_iid.get(row_id, {}).get('polling_ms', POLLING_DEFAULT_MS)
-        if not messagebox.askyesno(
-            "Confirmar forzado",
-            f"¿Forzar escritura continua de '{nuevo_valor}' en el tag '{tag_actual}'\n"
-            f"cada {polling_actual} ms? Esto escribe sobre el PLC en tiempo real.",
-            parent=self.window
-        ):
-            self.tree.set(row_id, 'sobrescribir', '')
-            return
-
+            nuevo_valor = polling
         with self.lock:
-            self.entradas_por_iid[row_id]['forzar'] = True
-            self.entradas_por_iid[row_id]['valor_forzado'] = nuevo_valor
-        self.tree.set(row_id, 'sobrescribir', nuevo_valor)
-        self.tree.item(row_id, tags=('forzando',))
+            self.entradas_por_iid[row_id]['polling_ms' if clave == 'polling' else clave] = nuevo_valor
+        self.tree.set(row_id, clave, str(nuevo_valor))
+        if clave == 'ip' and self._fila_conectada(row_id):
+            self._conectar_fila(row_id)  # reconecta con la IP nueva
+        self._actualizar_barra_estado()
 
     # ---------------------------------------------------------
+    # Conexión e hilo de sondeo
     def _conectar_fila(self, iid):
         if not PYLOGIX_DISPONIBLE:
             messagebox.showerror("Falta pylogix", "Instálala con: pip install pylogix", parent=self.window)
             return
-
-        with self.lock:
-            ip = self.entradas_por_iid.get(iid, {}).get('ip', '').strip()
+        ip = self.entradas_por_iid.get(iid, {}).get('ip', '').strip()
         if not ip:
-            messagebox.showerror("Falta IP", "Escribe una IP en esta fila antes de conectar.", parent=self.window)
+            messagebox.showerror("Falta IP", "Esta fila no tiene IP.", parent=self.window)
             return
-
-        # Si ya había una conexión corriendo en esta fila (ej. reconectar tras
-        # editar la IP), se espera a que termine por completo antes de abrir
-        # una nueva -- evita dos hilos vivos sobre la misma fila a la vez.
-        self._desconectar_fila(iid, silencioso=True)
-
+        # Se espera a que termine una conexión previa de la fila antes de abrir otra.
+        self._desconectar_fila(iid, silencioso=True, detener_escritura=False)
         detener = threading.Event()
         self._detener_por_iid[iid] = detener
         hilo = threading.Thread(target=self._loop_polling_fila, args=(iid, ip, detener), daemon=True)
         self._hilos_por_iid[iid] = hilo
-
-        self.tree.set(iid, 'conectar', 'Conectando...')
-        self.tree.set(iid, 'estado', 'Conectando...')
+        self._poner_conexion(iid, CONEX_CONECTANDO, "Conectando...")
         hilo.start()
 
-    def _desconectar_fila(self, iid, silencioso=False):
+    def _desconectar_fila(self, iid, silencioso=False, detener_escritura=True):
         detener = self._detener_por_iid.get(iid)
         hilo = self._hilos_por_iid.get(iid)
         if detener is not None:
@@ -485,69 +467,67 @@ class LogixWindow:
             hilo.join(timeout=2)
         self._hilos_por_iid.pop(iid, None)
         self._detener_por_iid.pop(iid, None)
-
+        if detener_escritura:
+            with self.lock:
+                entrada = self.entradas_por_iid.get(iid)
+                if entrada:
+                    entrada['trabajo'].detener("Detenido (desconectado)")
         if not silencioso and self.tree.exists(iid):
-            self.tree.set(iid, 'conectar', 'Conectar')
-            self.tree.set(iid, 'estado', 'Desconectado')
-            self.tree.set(iid, 'valor', '')
-            self.tree.item(iid, tags=('desconectado',))
+            self._poner_conexion(iid, CONEX_OFF, "Desconectado")
+            self._poner_valor(iid, '')
+            self._refrescar_fila(iid)
 
     def _loop_polling_fila(self, iid, ip, detener):
-        """
-        Corre en un hilo por fila. Crea SU PROPIA instancia de PLC -- pylogix
-        recomienda no compartir una instancia entre hilos.
-        """
+        """Hilo de la fila: escribe (si hay escritura en curso) y lee, cada 'polling' ms."""
         try:
             plc = PLC(ip)
         except Exception as e:
-            self.cola.put((iid, 'estado', (f'Error: {e}', COLOR_ERROR)))
+            self.cola.put((iid, 'conexion', (CONEX_ERROR, f'Error: {e}')))
             return
 
-        # Prueba de conexión real al conectar (PLC(ip) solo guarda la IP,
-        # no conecta de verdad hasta el primer Read/Write). GetPLCTime() no
-        # necesita saber ningún tag.
         try:
             prueba = plc.GetPLCTime()
             if getattr(prueba, 'Status', None) == 'Success':
-                self.cola.put((iid, 'estado', ('Conectado', COLOR_EXITO)))
-                self.cola.put((iid, 'conectar', 'Desconectar'))
+                self.cola.put((iid, 'conexion', (CONEX_ON, 'Conectado')))
             else:
-                self.cola.put((iid, 'estado', (f'Advertencia: {prueba.Status}', COLOR_PENDIENTE)))
-                self.cola.put((iid, 'conectar', 'Desconectar'))
+                self.cola.put((iid, 'conexion', (CONEX_ERROR, f'Sin respuesta: {prueba.Status}')))
         except Exception as e:
-            self.cola.put((iid, 'estado', (f'Sin respuesta: {e}', COLOR_ERROR)))
-            self.cola.put((iid, 'conectar', 'Desconectar'))
             # No se corta el hilo: si el equipo no soporta GetPLCTime pero sí
             # Read/Write, el ciclo de abajo lo confirma en cuanto haya un tag.
+            self.cola.put((iid, 'conexion', (CONEX_ERROR, f'Sin respuesta: {e}')))
 
         while not detener.is_set():
             with self.lock:
-                datos = dict(self.entradas_por_iid.get(iid, {}))
-            tag = datos.get('tag')
-            polling_ms = datos.get('polling_ms', POLLING_DEFAULT_MS)
+                entrada = self.entradas_por_iid.get(iid)
+                if entrada is None:
+                    break
+                tag = entrada['tag']
+                polling_ms = entrada['polling_ms']
+                trabajo = entrada['trabajo']
+                escribir = trabajo.estado == logix_tools.WORKING
+                corrida, valor = trabajo.corrida, trabajo.valor
 
             if tag:
-                if datos.get('forzar') and datos.get('valor_forzado'):
+                if escribir:
                     try:
-                        valor = logix_tools.convertir_valor(datos['valor_forzado'])
-                        plc.Write(tag, valor)
-                    except Exception:
-                        pass  # el error se refleja en el próximo Read
-
+                        status = plc.Write(tag, valor).Status
+                    except Exception as e:
+                        status = f'Error: {e}'
+                    hora = datetime.now().strftime('%H:%M:%S.%f')[:-3]
+                    with self.lock:
+                        trabajo.registrar(corrida, status, hora)
                 try:
                     r = plc.Read(tag)
                     if r.Status == 'Success':
-                        self.cola.put((iid, 'valor', (r.Value, r.Status)))
-                        self.cola.put((iid, 'estado', ('Conectado', COLOR_EXITO)))
+                        self.cola.put((iid, 'valor', r.Value))
+                        self.cola.put((iid, 'conexion', (CONEX_ON, 'Conectado')))
                     else:
-                        # Antes cualquier respuesta se mostraba como "Conectado"
-                        # aunque el tag no existiera (Value=None).
-                        self.cola.put((iid, 'valor', ('', r.Status)))
-                        self.cola.put((iid, 'estado', (f'Error: {r.Status}', COLOR_ERROR)))
+                        self.cola.put((iid, 'valor', ''))
+                        self.cola.put((iid, 'conexion', (CONEX_ERROR, f'Error de lectura: {r.Status}')))
                 except Exception as e:
-                    self.cola.put((iid, 'estado', (f'Error de lectura: {e}', COLOR_ERROR)))
+                    self.cola.put((iid, 'conexion', (CONEX_ERROR, f'Error de lectura: {e}')))
 
-            time.sleep(max(polling_ms, POLLING_MIN_MS) / 1000)
+            detener.wait(max(polling_ms, POLLING_MIN_MS) / 1000)
 
         try:
             plc.Close()
@@ -555,27 +535,75 @@ class LogixWindow:
             pass
 
     # ---------------------------------------------------------
+    # Pintar la tabla (siempre en el hilo de la GUI)
+    def _poner_conexion(self, iid, simbolo, texto):
+        entrada = self.entradas_por_iid.get(iid)
+        if entrada is None or not self.tree.exists(iid):
+            return
+        entrada['conexion'], entrada['estado_texto'] = simbolo, texto
+        self.tree.set(iid, 'conexion', simbolo)
+
+    def _poner_valor(self, iid, valor):
+        entrada = self.entradas_por_iid.get(iid)
+        if entrada is None or not self.tree.exists(iid):
+            return
+        entrada['valor'] = '' if valor is None else str(valor)
+        self.tree.set(iid, 'valor', entrada['valor'])
+
+    def _refrescar_fila(self, iid):
+        """Columna ESCRITURA y color de la fila según conexión y escritura."""
+        entrada = self.entradas_por_iid.get(iid)
+        if entrada is None or not self.tree.exists(iid):
+            return
+        with self.lock:
+            trabajo = entrada['trabajo']
+            texto = trabajo.texto_columna() if (trabajo.corrida or trabajo.estado != logix_tools.IDLE) else ''
+            escribiendo = trabajo.estado == logix_tools.WORKING
+        if self.tree.set(iid, 'escritura') != texto:
+            self.tree.set(iid, 'escritura', texto)
+        if escribiendo:
+            etiqueta = 'escribiendo'
+        elif entrada['conexion'] == CONEX_ON:
+            etiqueta = 'conectado'
+        elif entrada['conexion'] == CONEX_ERROR:
+            etiqueta = 'error'
+        else:
+            etiqueta = 'desconectado'
+        if self.tree.item(iid, 'tags') != (etiqueta,):
+            self.tree.item(iid, tags=(etiqueta,))
+
+    def _actualizar_barra_estado(self):
+        iid = self._seleccion()
+        if not iid:
+            self.var_barra.set(f"{len(self.entradas_por_iid)} variable(s) · selecciona una fila para ver su detalle")
+            return
+        fila = self.fila(iid)
+        texto = f"{fila['tag'] or '(sin tag)'}  @ {fila['ip'] or '(sin IP)'}  ·  {fila['estado_texto']}"
+        t = fila['trabajo']
+        if t['estado'] != logix_tools.IDLE or t['mensaje']:
+            texto += f"  ·  escritura {t['estado']} {t['progreso']}"
+            if t['ultimo_status'] and t['ultimo_status'] != 'Success':
+                texto += f" (última: {t['ultimo_status']})"
+        if self.var_barra.get() != texto:
+            self.var_barra.set(texto)
+
     def _procesar_cola(self):
         if self._cerrado:
             return
         try:
             while True:
                 iid, tipo, dato = self.cola.get_nowait()
-                if not self.tree.exists(iid):
-                    continue
-                if tipo == 'estado':
-                    texto, color = dato
-                    self.tree.set(iid, 'estado', texto)
-                    if not self.entradas_por_iid.get(iid, {}).get('forzar'):
-                        tag_visual = 'conectado' if color == COLOR_EXITO else 'desconectado'
-                        self.tree.item(iid, tags=(tag_visual,))
-                elif tipo == 'conectar':
-                    self.tree.set(iid, 'conectar', dato)
+                if not self.tree.exists(iid) or not self._fila_conectada(iid):
+                    continue  # mensaje viejo de un hilo ya detenido
+                if tipo == 'conexion':
+                    self._poner_conexion(iid, *dato)
                 elif tipo == 'valor':
-                    valor, status = dato
-                    self.tree.set(iid, 'valor', str(valor))
+                    self._poner_valor(iid, dato)
         except queue.Empty:
             pass
+        for iid in self.tree.get_children(''):
+            self._refrescar_fila(iid)
+        self._actualizar_barra_estado()
         if not self._cerrado:
             self._after_id = self.window.after(80, self._procesar_cola)
 
@@ -587,9 +615,10 @@ class LogixWindow:
                 self.window.after_cancel(self._after_id)
             except Exception:
                 pass
-        # Desconectar todas las filas (espera a que cada hilo termine) ANTES
-        # de destruir la ventana -- evita threads vivos tocando objetos de
-        # Tkinter en el instante en que se empiezan a limpiar.
+        for ventana in list(self._ventanas_escritura.values()):
+            ventana.cerrar()
+        # Detener escrituras y desconectar todo ANTES de destruir la ventana:
+        # evita hilos vivos tocando objetos de Tkinter mientras se limpian.
         for iid in list(self._hilos_por_iid.keys()):
             self._desconectar_fila(iid, silencioso=True)
         self.window.destroy()

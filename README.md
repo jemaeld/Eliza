@@ -68,7 +68,7 @@ Carpeta de datos (local o remota): `config_json\` (vnc/apps/acd.json),
 | `/add` | Alta de VNC/APPS desde .vnc/.lnk/.exe |
 | `/bitacora` | Nuevo registro de bitácora |
 | `/bitacora <hoy, ayer, DD, MM/DD, YYYY-MM-DD>` | Visor, exportar TSV, copiar a Excel |
-| `/logix [ip o nombre]` | Monitor/forzado de tags (pylogix), con asistente para elegir programa y tag leídos del PLC |
+| `/logix [ip o nombre]` | Monitor de variables (pylogix): asistente de tags leídos del PLC y escritura de 1 a N veces con seguimiento |
 | `/settings` | Cambia la carpeta de datos (remota o local) |
 | `/reload` | Relee la base de datos |
 | `/update` | Descarga la última versión desde GitHub |
@@ -107,6 +107,7 @@ un repositorio git (usa `git pull`). Los datos locales (`datos\`,
 | `bitacora_tools.py` / `bitacora_terminal.py` | Bitácora |
 | `logix_tools.py` / `logix_window.py` | Monitor de tags |
 | `logix_tag_dialog.py` / `logix_explorador.py` | Asistente de tags y lectura de programas/tags del PLC |
+| `logix_escritura.py` | Ventana de escritura 1..N veces (IDLE / WORKING / DONE) |
 | `estilo_consola.py` | Paleta de las ventanas Tkinter |
 
 Historial de cambios en [`docs/`](docs/).

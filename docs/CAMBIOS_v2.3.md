@@ -92,3 +92,32 @@
 - Módulos nuevos: `logix_tag_dialog.py` (ventana) y `logix_explorador.py`
   (consultas al PLC en hilos). `logix_tools.py` suma `armar_ruta`,
   `separar_ruta` y `filtrar_nombres`.
+
+## v2.5: /logix como Monitor de Variables + ventana de escritura
+
+- **Ventanas emergentes** (agregar tag, escribir) sin barra de título, como
+  el resto de Eliza, con **borde verde** para resaltar
+  (`estilo_consola.ventana_emergente`).
+- **Monitor de Variables**: columnas compactas
+  `CONEX | IP | POLL | TAG | VALOR | ESCRITURA | COMENTARIO`.
+  - CONEX junta conectar y estado: `● ON` / `○ OFF` / `…` / `× ERR`; clic
+    para conectar o desconectar.
+  - El detalle completo (error exacto, escritura en curso) va en una barra
+    de estado abajo, para la fila seleccionada.
+  - La fila se resalta en ámbar mientras escribe.
+  - Atajos: Ctrl+N agregar, Ctrl+E escribir, Supr eliminar.
+- **Ventana Escribir** (botón "Escribir…", Ctrl+E o doble clic en
+  VALOR/ESCRITURA) reemplaza a la columna SOBRESCRIBIR:
+  - valor a escribir, **Veces 1..N** o **Continuo**, al ritmo del polling
+    de la fila;
+  - **botón indicador de 3 estados**: IDLE (clic inicia) → WORKING n/N
+    (clic detiene) → DONE n/N (clic vuelve a IDLE);
+  - valor actual en vivo, barra de progreso, errores y bitácora de cada
+    escritura con hora y resultado;
+  - no es modal: se puede cerrar y la escritura sigue (se ve en la columna
+    ESCRITURA). Si la fila no está conectada, se conecta sola al iniciar.
+    Desconectar la fila detiene la escritura.
+- "Detener escrituras" detiene todas.
+- Cada ciclo escribe antes de leer, así la lectura muestra el efecto.
+- Lógica del trabajo de escritura en `logix_tools.TrabajoEscritura`;
+  ventana en `logix_escritura.py`.

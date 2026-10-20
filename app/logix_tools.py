@@ -163,3 +163,78 @@ def filtrar_nombres(nombres, texto, limite=500):
     empiezan = [n for n in nombres if n.lower().startswith(texto)]
     contienen = [n for n in nombres if texto in n.lower() and not n.lower().startswith(texto)]
     return (empiezan + contienen)[:limite]
+
+
+# ---------------------------------------------------------
+# Trabajo de escritura: escribir un valor 1..N veces (o continuo) al ritmo
+# del polling de la fila. Lo ejecuta el hilo de la fila; la GUI solo lo
+# consulta. Estados: IDLE -> WORKING -> DONE (-> IDLE al reiniciar).
+
+IDLE, WORKING, DONE = 'IDLE', 'WORKING', 'DONE'
+
+
+class TrabajoEscritura:
+    def __init__(self):
+        self.estado = IDLE
+        self.valor_texto = ''
+        self.valor = None
+        self.total = 0           # 0 = continuo (hasta detener)
+        self.hechas = 0
+        self.errores = 0
+        self.ultimo_status = ''
+        self.mensaje = ''
+        self.corrida = 0         # cambia en cada inicio: descarta resultados de una corrida anterior
+        self.historial = []      # [(hora, numero, status)] de la corrida actual (últimos 200)
+
+    def iniciar(self, valor_texto, total):
+        """Lanza ValueError si los datos no sirven."""
+        valor_texto = (valor_texto or '').strip()
+        if not valor_texto:
+            raise ValueError("Escribe el valor a escribir.")
+        total = int(total)
+        if total < 0:
+            raise ValueError("El número de veces no puede ser negativo.")
+        self.valor_texto = valor_texto
+        self.valor = convertir_valor(valor_texto)
+        self.total = total
+        self.hechas = 0
+        self.errores = 0
+        self.ultimo_status = ''
+        self.mensaje = ''
+        self.historial = []
+        self.corrida += 1
+        self.estado = WORKING
+        return self.corrida
+
+    def detener(self, motivo="Detenido"):
+        if self.estado == WORKING:
+            self.estado = IDLE
+            self.mensaje = f"{motivo} en {self.progreso_texto()}"
+
+    def reiniciar(self):
+        if self.estado == DONE:
+            self.estado = IDLE
+            self.mensaje = ''
+
+    def registrar(self, corrida, status, hora=''):
+        """Resultado de una escritura. Ignora resultados de corridas viejas o ya detenidas."""
+        if corrida != self.corrida or self.estado != WORKING:
+            return
+        self.hechas += 1
+        self.ultimo_status = status
+        if status != 'Success':
+            self.errores += 1
+        self.historial.append((hora, self.hechas, status))
+        del self.historial[:-200]
+        if self.total and self.hechas >= self.total:
+            self.estado = DONE
+            self.mensaje = "Completado" + (f" con {self.errores} error(es)" if self.errores else "")
+
+    def progreso_texto(self):
+        return f"{self.hechas}/{self.total if self.total else '∞'}"
+
+    def texto_columna(self):
+        if self.estado == IDLE:
+            return "IDLE" if not self.mensaje else f"IDLE {self.progreso_texto()}"
+        texto = f"{self.estado} {self.progreso_texto()}"
+        return texto + (f" ({self.errores} err)" if self.errores else "")
