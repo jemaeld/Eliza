@@ -91,3 +91,35 @@ def abrir_settings_terminal(carpeta_actual, root):
         pass
     consola.info("Sin cambios.")
     return None
+
+
+def remota_no_disponible(remota, root):
+    """
+    La carpeta remota no responde al arrancar (típico: el equipo sigue en
+    la red con internet después de /update). Espera a que el usuario
+    cambie de red. Devuelve (carpeta, es_respaldo_local) o (None, False)
+    para salir.
+    """
+    consola.titulo("Carpeta de datos remota no disponible")
+    consola.info(f"No se encuentra: {remota}")
+    consola.info("Si estás en otra red (p. ej. después de /update), cambia a la red de planta.")
+    print(f"{consola.COLOR_ENCABEZADO}[Enter] Reintentar   [L] Usar datos locales solo esta vez   "
+          f"[S] Salir{consola.COLOR_RESET}")
+    preguntas = consola.Cuestionario()
+    while True:
+        try:
+            opcion = preguntas.preguntar("Opción").lower()
+        except consola.Cancelado:
+            opcion = 's'
+        if opcion == 's':
+            return None, False
+        if opcion == 'l':
+            local = eliza_home.carpeta_local()
+            eliza_home.preparar_estructura(local)
+            consola.aviso("Usando datos LOCALES en esta sesión. La remota sigue configurada para el próximo arranque.")
+            return local, True
+        consola.info("Buscando la carpeta remota...")
+        if eliza_home.remota_disponible(remota):
+            consola.ok("Carpeta remota encontrada.")
+            return remota, False
+        consola.aviso("Todavía no responde. Revisa la red y vuelve a presionar Enter.")

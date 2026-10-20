@@ -105,24 +105,30 @@ def establecer_carpeta(carpeta_externa):
     return carpeta
 
 
+def remota_disponible(carpeta):
+    """True si la carpeta remota responde y se puede preparar su estructura."""
+    try:
+        if not os.path.isdir(carpeta):
+            return False
+        preparar_estructura(carpeta)
+        return True
+    except OSError:
+        return False
+
+
 def resolver_carpeta_eliza():
     """
-    Devuelve (carpeta, aviso). 'aviso' es None o un texto para mostrar
-    (p. ej. si la carpeta remota no estaba disponible).
+    Devuelve (carpeta, remota_caida):
+    - remota configurada y disponible -> (remota, None)
+    - remota configurada pero NO disponible -> (None, ruta_remota): quien
+      llama decide (reintentar, usar local o salir); aquí no se cambia sola.
+    - sin remota -> (local, None)
     """
     externa = leer_carpeta_externa()
-    aviso = None
     if externa:
-        if os.path.isdir(externa):
-            try:
-                preparar_estructura(externa)
-                return externa, None
-            except OSError as e:
-                aviso = f"No se pudo usar la carpeta de datos remota ({e})."
-        else:
-            aviso = f"La carpeta de datos remota no está disponible: {externa}"
-        aviso += " Se usan los datos LOCALES en esta sesión (revisa /settings)."
-
+        if remota_disponible(externa):
+            return externa, None
+        return None, externa
     local = carpeta_local()
     preparar_estructura(local)
-    return local, aviso
+    return local, None

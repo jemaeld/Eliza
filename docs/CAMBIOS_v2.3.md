@@ -60,3 +60,14 @@
   L31E25, 10.140.126.9 antes que 10.140.126.10).
 - El orden se guarda en el JSON con Ctrl+S, y así queda también en el
   autocompletado.
+
+## v2.3.3: carpeta remota no disponible al arrancar
+
+- Antes, si la carpeta remota no respondía (p. ej. al reiniciar tras
+  `/update` todavía en la red con internet), Eliza se pasaba en silencio a
+  los datos locales y pedía la contraseña.
+- Ahora espera con un menú: **[Enter] reintentar** (cambias a la red de
+  planta y presionas Enter), **[L]** datos locales solo esta vez, **[S]** salir.
+  La carpeta remota nunca se borra de la configuración.
+- En modo local de respaldo, un equipo ya validado no vuelve a pedir la
+  contraseña. Un equipo nuevo necesita la remota para validarse.

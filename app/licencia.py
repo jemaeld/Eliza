@@ -75,16 +75,26 @@ def _pedir(sesion, mensaje):
         return ''
 
 
-def verificar(ctx):
+def verificar(ctx, respaldo_local=False):
     """
     Devuelve True si se puede arrancar. Pide la contraseña solo cuando hace
     falta. Si se define o se recupera, la deja en ctx.config.
+
+    respaldo_local=True: la remota no estaba disponible y el usuario eligió
+    datos locales solo por esta vez. Una instalación ya validada arranca sin
+    pedir nada; una nueva no puede validarse sin la carpeta remota.
     """
     guardada = (ctx.config.get(CLAVE_CONFIG) or '').strip()
     huella_local = _leer_huella_local()
 
     if guardada and huella_local == _huella(guardada):
         return True  # instalación ya validada con la contraseña vigente
+
+    if respaldo_local:
+        if huella_local:
+            return True
+        consola.aviso("Este equipo aún no tiene acceso validado: se necesita la carpeta remota la primera vez.")
+        return False
 
     sesion = PromptSession(style=consola.ESTILO)
     consola.titulo("ELIZA: acceso")

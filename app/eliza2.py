@@ -480,10 +480,19 @@ def main():
     if eliza_home.es_primer_arranque():
         settings_terminal.primer_arranque(tk_root)
         limpiar_pantalla()
-    carpeta, aviso = eliza_home.resolver_carpeta_eliza()
-    ctx.usar_carpeta(carpeta, externa_no_disponible=bool(aviso))
+    carpeta, remota_caida = eliza_home.resolver_carpeta_eliza()
+    respaldo = False
+    if remota_caida:
+        carpeta, respaldo = settings_terminal.remota_no_disponible(remota_caida, tk_root)
+    if carpeta is None:
+        try:
+            tk_root.destroy()
+        except tk.TclError:
+            pass
+        return 0
+    ctx.usar_carpeta(carpeta, externa_no_disponible=respaldo)
     avisos = ctx.recargar(silencioso=True)
-    if not licencia.verificar(ctx):
+    if not licencia.verificar(ctx, respaldo_local=respaldo):
         try:
             tk_root.destroy()
         except tk.TclError:
@@ -491,7 +500,9 @@ def main():
         return 1
     limpiar_pantalla()
     mostrar_banner(ctx)
-    for a in ([aviso] if aviso else []) + avisos:
+    if respaldo:
+        avisos.insert(0, "Trabajando con datos LOCALES en esta sesión (la remota no estaba disponible).")
+    for a in avisos:
         consola.aviso(a)
 
     ctx.session = PromptSession(completer=ElizaCompleter(ctx.mapa_comandos), style=consola.ESTILO)
