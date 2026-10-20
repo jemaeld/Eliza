@@ -1,0 +1,24 @@
+# Entorno y caches
+.venv/
+__pycache__/
+*.pyc
+build/
+dist/
+*.spec
+
+# Datos y configuracion local de cada equipo (NUNCA al repo)
+datos/
+config_json/
+bitacora/
+_acd_store/
+eliza_config.json
+eliza_local.json
+eliza_github_token.txt
+eliza_error.log
+*.tsv
+
+# Restos del instalador/actualizador
+_descarga/
+app.old/
+app.nuevo/
+Eliza.bat.nuevo
