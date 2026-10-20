@@ -17,6 +17,7 @@ descripción. Con eso aparece en el autocompletado con "/" y en /help.
 
 import os
 import re
+import sys
 import json
 import glob
 import time
@@ -31,6 +32,7 @@ from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.formatted_text import HTML
 
 import acd_tools
+import actualizador
 import add_terminal
 import bitacora_terminal
 import bitacora_tools
@@ -44,7 +46,7 @@ import scanner_window
 import settings_terminal
 from consola import COLOR_BORDE, COLOR_DATOS, COLOR_ETIQUETA, COLOR_LOGO, COLOR_RESET
 
-VERSION = "ELIZA v2.2 -- by JDRG"
+VERSION = "ELIZA v2.3 -- by JDRG"
 
 # Categorías cuyas entradas tienen IP y se pueden usar con /ping y /logix por nombre
 CATEGORIAS_CON_IP = ("VNC", "ACD")
@@ -61,16 +63,17 @@ class Contexto:
         self.base_dir = None
         self.config = {}
         self.mapa_comandos = {}
-        self.modo_datos = "propia"   # propia | externa | propia (externa no disponible)
+        self.modo_datos = "local"   # local | remota | local (remota no disponible)
         self.session = None
         self.salir = False
+        self.codigo_salida = 0
 
     def usar_carpeta(self, carpeta, externa_no_disponible=False):
         self.base_dir = carpeta
         if externa_no_disponible:
-            self.modo_datos = "propia (externa no disponible)"
+            self.modo_datos = "local (remota no disponible)"
         else:
-            self.modo_datos = "externa" if eliza_home.leer_carpeta_externa() else "propia"
+            self.modo_datos = "remota" if eliza_home.leer_carpeta_externa() else "local"
 
     def recargar(self, silencioso=False):
         """Relee config y config_json/. silencioso=True: no imprime nada y devuelve los avisos."""
@@ -164,6 +167,7 @@ def mostrar_banner(ctx):
         ("Fecha:", ahora.strftime("%Y-%m-%d")),
         ("Hora:", ahora.strftime("%H:%M:%S")),
         ("Datos:", f"{ctx.modo_datos} · {len(ctx.mapa_comandos)} entradas"),
+        ("Versión:", actualizador.version_actual()),
     ]
     plano_max = max(len(f" {e:<{ANCHO_ETIQUETA_BANNER}}{v}") for e, v in filas)
     ancho = max(plano_max + 2, 40)
@@ -236,6 +240,23 @@ def lanzar_vnc(ip, config):
     os.startfile(f.name)
 
 
+def _pedir_password_vnc(ctx):
+    """
+    La contraseña VNC no está en el código (el repositorio la publicaría):
+    se pide una sola vez y se guarda en eliza_config.json de la carpeta de
+    datos (si es remota, queda para todos los equipos).
+    """
+    consola.titulo("Contraseña VNC (solo esta vez)")
+    consola.info("Pega el valor de 'password=' de cualquier archivo .vnc que ya funcione")
+    consola.info("(es el formato cifrado, ej. 00a1b2c3d4e5f6a7). Enter = sin contraseña.")
+    try:
+        valor = consola.Cuestionario().preguntar("password")
+    except consola.Cancelado:
+        return
+    ctx.config = config_manager.actualizar_clave(ctx.base_dir, 'vnc_password', valor)
+    consola.ok("Guardada en eliza_config.json")
+
+
 def ejecutar_entrada(ctx, item):
     data = item['data']
     if item['categoria'] == "VNC":
@@ -246,6 +267,8 @@ def ejecutar_entrada(ctx, item):
         if not ip:
             consola.aviso(f"'{data['name']}' no tiene IP registrada.")
             return
+        if 'vnc_password' not in ctx.config:
+            _pedir_password_vnc(ctx)
         lanzar_vnc(ip, ctx.config)
     else:
         ruta = acd_tools.resolver_ruta_action(data.get('action', ''), ctx.base_dir)
@@ -348,6 +371,12 @@ def cmd_reload(ctx, arg):
     ctx.recargar()
 
 
+def cmd_update(ctx, arg):
+    if actualizador.ejecutar_update():
+        ctx.codigo_salida = actualizador.CODIGO_REINICIAR
+        ctx.salir = True
+
+
 def cmd_help(ctx, arg):
     consola.titulo("COMANDOS DISPONIBLES")
     for cmd, (descripcion, _) in COMANDOS.items():
@@ -376,8 +405,9 @@ COMANDOS = {
     '/add':      ('Agrega VNC/APPS: elige archivo(s) .vnc/.lnk/.exe y completa por consola', cmd_add),
     '/bitacora': ('Sin fecha: nuevo registro. Con fecha (hoy, ayer, DD, MM/DD, YYYY-MM-DD): visor', cmd_bitacora),
     '/logix':    ('Monitor/forzado de tags Allen-Bradley (pylogix). IP/nombre opcional', cmd_logix),
-    '/settings': ('Elige la carpeta de datos: propia (por defecto) o externa/red', cmd_settings),
+    '/settings': ('Cambia la carpeta de datos: remota/compartida o local', cmd_settings),
     '/reload':   ('Vuelve a leer la base de datos (si otro equipo la modificó)', cmd_reload),
+    '/update':   ('Busca y descarga la última versión de Eliza desde GitHub', cmd_update),
     '/help':     ('Muestra esta lista de comandos', cmd_help),
 }
 SALIDA = ('exit', 'quit', '/exit', '/quit')
@@ -418,7 +448,7 @@ class ElizaCompleter(Completer):
 
 def _registrar_error(ctx, entrada):
     """Guarda el traceback en eliza_error.log (junto a Eliza) para poder depurar después."""
-    ruta = os.path.join(eliza_home.ruta_ejecutable(), "eliza_error.log")
+    ruta = os.path.join(eliza_home.ruta_instalacion(), "eliza_error.log")
     try:
         with open(ruta, 'a', encoding='utf-8') as f:
             f.write(f"\n=== {datetime.now():%Y-%m-%d %H:%M:%S} | entrada: {entrada!r}\n")
@@ -465,6 +495,9 @@ def main():
     tk_root.withdraw()
 
     ctx = Contexto(tk_root)
+    if eliza_home.es_primer_arranque():
+        settings_terminal.primer_arranque(tk_root)
+        limpiar_pantalla()
     carpeta, aviso = eliza_home.resolver_carpeta_eliza()
     ctx.usar_carpeta(carpeta, externa_no_disponible=bool(aviso))
     avisos = ctx.recargar(silencioso=True)
@@ -496,7 +529,8 @@ def main():
         tk_root.destroy()
     except tk.TclError:
         pass
+    return ctx.codigo_salida
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

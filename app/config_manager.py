@@ -7,9 +7,11 @@ las listas de comandos vnc.json, apps.json, acd.json).
 eliza_config.json vive DENTRO de la carpeta de datos (ver eliza_home.py),
 así que si esa carpeta es compartida, la configuración también.
 
-Claves actuales:
-- vnc_password: contraseña (ya cifrada, formato de archivo .vnc) que se
-  escribe en el .vnc temporal al conectar. Antes estaba fija en el código.
+Claves:
+- vnc_password: contraseña VNC en el formato cifrado de los archivos .vnc
+                (el valor de 'password=' de cualquier .vnc). No está en el
+                código para no publicarla en el repositorio: si falta, Eliza
+                la pregunta la primera vez que se abre un VNC.
 - vnc_puerto:   puerto VNC por defecto.
 
 Claves desconocidas o viejas (p. ej. 'carpeta_destino_acd') se conservan
@@ -24,7 +26,6 @@ import json_db
 NOMBRE_ARCHIVO = "eliza_config.json"
 
 VALORES_POR_DEFECTO = {
-    "vnc_password": "002c648ab940042d",
     "vnc_puerto": 5900,
 }
 
@@ -57,3 +58,11 @@ def cargar_config(carpeta_eliza):
 
 def guardar_config(carpeta_eliza, config):
     json_db.escribir_json(_ruta_config(carpeta_eliza), config)
+
+
+def actualizar_clave(carpeta_eliza, clave, valor):
+    """Relee, cambia una sola clave y guarda (para no pisar cambios de otro equipo)."""
+    config = cargar_config(carpeta_eliza)
+    config[clave] = valor
+    guardar_config(carpeta_eliza, config)
+    return config
