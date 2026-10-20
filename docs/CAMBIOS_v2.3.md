@@ -71,3 +71,24 @@
   La carpeta remota nunca se borra de la configuración.
 - En modo local de respaldo, un equipo ya validado no vuelve a pedir la
   contraseña. Un equipo nuevo necesita la remota para validarse.
+
+## v2.4: asistente de tags en /logix
+
+- **"+ Agregar tag"** abre un asistente (ventana emergente):
+  IP · Scope **Principal (Controlador)** / **Subprograma** · Programa · Tag ·
+  Comentario, con la **ruta final** armada en vivo
+  (`Program:Estacion30.Timer.DN`).
+- **Programas y tags leídos del PLC** (pylogix `GetTagList` y
+  `GetProgramTagList`) en segundo plano: la ventana no se congela y se puede
+  seguir escribiendo mientras carga. Listas filtrables al escribir (flecha
+  abajo para verlas), en orden natural. Se guardan en memoria por IP
+  durante la sesión; "Leer del PLC" vuelve a consultar.
+- Sin conexión con el PLC, todo funciona como texto libre.
+- Se aceptan miembros e índices (`Motor[3].Run`, `UDT.Campo`). Pegar una
+  ruta completa `Program:X.Y` en Tag la reparte sola en los campos.
+- **Doble clic en la celda TAG** abre el mismo asistente ya lleno (separa
+  programa y tag); si cambias la IP, la fila se reconecta.
+- `/logix <ip>` abre el asistente directo con esa IP.
+- Módulos nuevos: `logix_tag_dialog.py` (ventana) y `logix_explorador.py`
+  (consultas al PLC en hilos). `logix_tools.py` suma `armar_ruta`,
+  `separar_ruta` y `filtrar_nombres`.

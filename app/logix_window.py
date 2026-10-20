@@ -10,9 +10,12 @@ propio polling rate, su propio hilo de sondeo. Columnas:
 
     IP | POLLING (ms) | CONECTAR | TAG | VALOR ACTUAL | ESTADO | SOBRESCRIBIR | COMENTARIO
 
-- Doble clic en IP, POLLING, TAG, SOBRESCRIBIR o COMENTARIO para editar esa
-  celda. Editar IP/POLLING mientras la fila está conectada la reconecta sola
-  con el valor nuevo.
+- "+ Agregar tag" y doble clic en la celda TAG abren el asistente de tags
+  (logix_tag_dialog): scope Principal/Subprograma, programa y tag con
+  listas leídas del PLC, sin escribir la ruta Program:X.Y a mano.
+- Doble clic en IP, POLLING, SOBRESCRIBIR o COMENTARIO edita esa celda.
+  Editar IP/POLLING mientras la fila está conectada la reconecta sola con
+  el valor nuevo.
 - Clic (sencillo) en CONECTAR alterna conectar/desconectar esa fila.
 - Un valor en SOBRESCRIBIR fuerza escritura continua en esa fila (pide
   confirmación, porque escribe sobre un PLC real). Vaciar la celda detiene
@@ -38,6 +41,8 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 
 import estilo_consola as estilo
+import logix_explorador
+import logix_tag_dialog
 import logix_tools
 
 try:
@@ -77,6 +82,9 @@ class LogixWindow:
         # Eliza (antes era el directorio de trabajo, que variaba según desde
         # dónde se lanzara). Recuerda la última usada durante la sesión.
         self._ultima_carpeta = carpeta_registros or os.getcwd()
+        # Programas/tags leídos del PLC para el asistente (caché por IP en la sesión)
+        self.explorador = logix_explorador.ExploradorPLC()
+        self._ultima_ip = ip_inicial or ""
 
         # Toplevel de la raíz compartida, NO un Tk() propio -- crear varias
         # Tk() en el mismo proceso causa errores de Tcl al cerrarlas.
@@ -94,8 +102,8 @@ class LogixWindow:
                 parent=self.window
             )
         elif self.ip_inicial:
-            # /logix <ip>: se agrega una primera fila ya con esa IP, lista para conectar.
-            self.agregar_fila(ip=self.ip_inicial)
+            # /logix <ip>: se abre el asistente ya con esa IP.
+            self.window.after(200, self.asistente_agregar)
 
         self._after_id = self.window.after(80, self._procesar_cola)
 
@@ -103,7 +111,7 @@ class LogixWindow:
     def _construir_ui(self):
         botones = ttk.Frame(self.window, style="TLabel")
         botones.pack(fill='x', padx=10, pady=10)
-        ttk.Button(botones, text="+ Agregar tag", command=lambda: self.agregar_fila()).pack(side='left')
+        ttk.Button(botones, text="+ Agregar tag", command=self.asistente_agregar).pack(side='left')
         ttk.Button(botones, text="- Eliminar tag", command=self.eliminar_fila).pack(side='left', padx=5)
         ttk.Button(botones, text="Guardar registro", command=self.guardar_registro).pack(side='left')
         ttk.Button(botones, text="Cargar registro", command=self.cargar_registro).pack(side='left', padx=5)
@@ -134,8 +142,8 @@ class LogixWindow:
         pie.pack(fill='x', padx=10, pady=(0, 10))
         ttk.Label(
             pie,
-            text="Doble clic en IP/POLLING/TAG/SOBRESCRIBIR/COMENTARIO para editar · "
-                 "clic en CONECTAR conecta/desconecta esa fila · Esc cierra"
+            text="Doble clic en TAG: asistente · en IP/POLLING/SOBRESCRIBIR/COMENTARIO: editar · "
+                 "clic en CONECTAR: conectar/desconectar · Esc cierra"
         ).pack(side='left')
 
     def _siguiente_iid(self):
@@ -156,6 +164,37 @@ class LogixWindow:
         self.tree.selection_set(iid)
         self.tree.see(iid)
         return iid
+
+    # ---------------------------------------------------------
+    # Asistente de tags
+    def _ip_sugerida(self):
+        seleccion = self.tree.selection()
+        if seleccion and seleccion[0] in self.entradas_por_iid:
+            return self.entradas_por_iid[seleccion[0]].get('ip') or self._ultima_ip
+        return self._ultima_ip
+
+    def asistente_agregar(self):
+        if self._cerrado:
+            return
+        datos = logix_tag_dialog.abrir_dialogo_tag(self.window, self.explorador, ip=self._ip_sugerida())
+        if datos:
+            self._ultima_ip = datos['ip']
+            self.agregar_fila(ip=datos['ip'], tag=datos['tag'], comentario=datos['comentario'])
+
+    def asistente_editar(self, iid):
+        entrada = self.entradas_por_iid.get(iid)
+        if not entrada:
+            return
+        datos = logix_tag_dialog.abrir_dialogo_tag(
+            self.window, self.explorador, ip=entrada.get('ip', ''), tag=entrada.get('tag', ''),
+            comentario=entrada.get('comentario', ''), editar=True)
+        if not datos or iid not in self.entradas_por_iid:
+            return
+        self._ultima_ip = datos['ip']
+        self._aplicar_edicion(iid, 'tag', datos['tag'])
+        self._aplicar_edicion(iid, 'comentario', datos['comentario'])
+        if datos['ip'] != entrada.get('ip', ''):
+            self._aplicar_edicion(iid, 'ip', datos['ip'])  # reconecta si estaba conectada
 
     def eliminar_fila(self):
         seleccion = self.tree.selection()
@@ -302,6 +341,9 @@ class LogixWindow:
         if col_index < 0 or col_index >= len(COLUMNAS):
             return
         clave = COLUMNAS[col_index]
+        if clave == 'tag':
+            self.asistente_editar(row_id)
+            return
         if clave not in COLUMNAS_EDITABLES:
             return  # 'valor', 'estado' y 'conectar' no se editan escribiendo
 

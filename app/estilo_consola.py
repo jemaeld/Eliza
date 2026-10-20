@@ -64,6 +64,27 @@ def aplicar_estilo_base(window, titulo, geometry=None, resizable=True):
     return style
 
 
+def configurar_desplegables(window):
+    """Estilo oscuro para ttk.Combobox (campo y lista desplegable)."""
+    style = ttk.Style(window)
+    style.theme_use('clam')
+    style.configure("TButton", background=ACCENT, foreground=BG, borderwidth=0, padding=5, font=FONT_MONO_BOLD)
+    style.map("TButton", background=[('active', ACCENT_ACTIVO)])
+    style.configure("Eliza.TCombobox", fieldbackground=ENTRY_BG, background=ACCENT, foreground=FG_DATA,
+                    arrowcolor=BG, bordercolor=ENTRY_BG, lightcolor=ENTRY_BG, darkcolor=ENTRY_BG,
+                    insertcolor=FG, padding=3)
+    style.map("Eliza.TCombobox",
+              fieldbackground=[('readonly', ENTRY_BG), ('disabled', BG)],
+              foreground=[('disabled', '#555555')],
+              background=[('disabled', '#333333'), ('active', ACCENT_ACTIVO)])
+    # La lista que se despliega es un Listbox clásico: se configura con option_add.
+    window.option_add('*TCombobox*Listbox.background', ENTRY_BG)
+    window.option_add('*TCombobox*Listbox.foreground', FG_DATA)
+    window.option_add('*TCombobox*Listbox.selectBackground', ACCENT)
+    window.option_add('*TCombobox*Listbox.selectForeground', BG)
+    window.option_add('*TCombobox*Listbox.font', FONT_MONO)
+
+
 def _forzar_foco(window):
     try:
         window.lift()

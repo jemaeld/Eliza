@@ -110,3 +110,56 @@ def cargar_registro(ruta):
         raise ValueError("El archivo no contiene una lista de tags reconocible.")
 
     return [f for f in (_normalizar_fila(f) for f in crudas) if f is not None]
+
+
+# ---------------------------------------------------------
+# Rutas de tag (scope del controlador vs. programa)
+#
+#   Controlador:  Motor1.Run
+#   Programa:     Program:Estacion30.Motor1.Run
+
+PREFIJO_PROGRAMA = "Program:"
+
+
+def _sin_prefijo_programa(programa):
+    programa = (programa or '').strip()
+    if programa.lower().startswith(PREFIJO_PROGRAMA.lower()):
+        programa = programa[len(PREFIJO_PROGRAMA):]
+    return programa.strip()
+
+
+def separar_ruta(ruta):
+    """
+    'Program:Est30.Motor.Run' -> ('Est30', 'Motor.Run')
+    'Motor.Run'               -> (None, 'Motor.Run')
+    """
+    ruta = (ruta or '').strip()
+    if ruta.lower().startswith(PREFIJO_PROGRAMA.lower()):
+        programa, punto, tag = ruta[len(PREFIJO_PROGRAMA):].partition('.')
+        if punto and programa.strip():
+            return programa.strip(), tag.strip()
+    return None, ruta
+
+
+def armar_ruta(programa, tag):
+    """
+    Arma la ruta completa. 'programa' vacío/None = scope del controlador.
+    Si 'tag' ya es una ruta completa (Program:X.Y), se respeta tal cual.
+    """
+    tag = (tag or '').strip()
+    if not tag:
+        return ''
+    if separar_ruta(tag)[0]:
+        return tag
+    programa = _sin_prefijo_programa(programa)
+    return f"{PREFIJO_PROGRAMA}{programa}.{tag}" if programa else tag
+
+
+def filtrar_nombres(nombres, texto, limite=500):
+    """Nombres que contienen 'texto' (sin distinguir mayúsculas); los que empiezan igual van primero."""
+    texto = (texto or '').strip().lower()
+    if not texto:
+        return list(nombres[:limite])
+    empiezan = [n for n in nombres if n.lower().startswith(texto)]
+    contienen = [n for n in nombres if texto in n.lower() and not n.lower().startswith(texto)]
+    return (empiezan + contienen)[:limite]
