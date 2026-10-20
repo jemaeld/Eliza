@@ -19,6 +19,7 @@ ESC cierra la ventana; si hay cambios sin guardar, primero pregunta.
 """
 
 import os
+import re
 import tkinter as tk
 from tkinter import ttk, messagebox
 
@@ -89,6 +90,7 @@ class EditTableWindow:
         ttk.Button(barra, text="Guardar (Ctrl+S)", command=self.guardar).pack(side='right')
         ttk.Button(barra, text="- Eliminar fila", command=self.eliminar_fila).pack(side='right', padx=5)
         ttk.Button(barra, text="+ Agregar fila", command=self.agregar_fila).pack(side='right')
+        ttk.Button(barra, text="Ordenar A-Z", command=self.ordenar_a_z).pack(side='right', padx=5)
 
         # "Reescanear" solo tiene sentido para ACD (archivos con fecha real
         # en disco); no aparece al editar vnc.json/apps.json.
@@ -99,12 +101,12 @@ class EditTableWindow:
         for clave in self.claves:
             ancho = 320 if clave == 'action' else 220 if clave == 'info' else 140
             self.tree.column(clave, width=ancho, anchor='w')
-            self.tree.heading(clave, text=clave.upper())
+            self.tree.heading(clave, text=clave.upper(), command=lambda c=clave: self.ordenar_por_columna(c))
         self.tree.pack(fill='both', expand=True, padx=10, pady=(0, 5))
 
         pie = ttk.Frame(self.window, style="TLabel")
         pie.pack(fill='x', padx=10, pady=(0, 10))
-        ttk.Label(pie, text="Doble clic en celda: editar (Enter confirma, Esc cancela) · Ctrl+S guarda · Esc cierra (pregunta si hay cambios)").pack(side='left')
+        ttk.Label(pie, text="Doble clic: editar · Clic en encabezado: ordenar por esa columna · Ctrl+S guarda · Esc cierra").pack(side='left')
 
         self.tree.bind('<Double-1>', self.iniciar_edicion_celda)
 
@@ -243,23 +245,53 @@ class EditTableWindow:
             self.cambios_sin_guardar = True
             actualizados += 1
 
-        self._ordenar_por_nombre()
+        if 'name' in self.claves:
+            self.ordenar_por('name')
 
         mensaje = f"Se actualizaron {actualizados} de {len(filas)} entrada(s)."
         if errores:
             mensaje += "\n\nNo se pudieron actualizar:\n" + "\n".join(errores)
         messagebox.showinfo("Reescanear", mensaje, parent=self.window)
 
-    def _ordenar_por_nombre(self):
-        """Reordena las filas de la tabla alfabéticamente según la columna 'name'."""
-        if 'name' not in self.claves:
-            return
+    # ---------------------------------------------------------
+    # Ordenar. El orden de la tabla es el que se guarda en el JSON (Ctrl+S).
+
+    @staticmethod
+    def _clave_natural(texto):
+        """
+        Orden "natural": los números se comparan como números, no como texto,
+        así L31E5 queda antes que L31E25 y 10.140.126.9 antes que 10.140.126.10.
+        """
+        partes = re.split(r'(\d+)', str(texto or '').strip().lower())
+        return [(0, int(p), '') if p.isdigit() else (1, 0, p) for p in partes]
+
+    def ordenar_por(self, clave, descendente=False):
+        """Reordena las filas por 'clave'. Devuelve True si el orden cambió."""
         filas = list(self.tree.get_children(''))
-        filas_ordenadas = sorted(filas, key=lambda iid: (self.tree.set(iid, 'name') or '').lower())
-        if filas_ordenadas != filas:
-            for indice, iid in enumerate(filas_ordenadas):
-                self.tree.move(iid, '', indice)
-            self.cambios_sin_guardar = True
+        ordenadas = sorted(filas, key=lambda iid: self._clave_natural(self.tree.set(iid, clave)),
+                           reverse=descendente)
+        for clave_col in self.claves:  # indicador ▲/▼ solo en la columna usada
+            flecha = (' ▼' if descendente else ' ▲') if clave_col == clave else ''
+            self.tree.heading(clave_col, text=clave_col.upper() + flecha)
+        self._orden_actual = (clave, descendente)
+        if ordenadas == filas:
+            return False
+        for indice, iid in enumerate(ordenadas):
+            self.tree.move(iid, '', indice)
+        self.cambios_sin_guardar = True
+        return True
+
+    def ordenar_a_z(self):
+        """Botón 'Ordenar A-Z': por nombre (o por la primera columna si no hay 'name')."""
+        self._confirmar_edicion_en_curso()
+        self.ordenar_por('name' if 'name' in self.claves else self.claves[0])
+
+    def ordenar_por_columna(self, clave):
+        """Clic en encabezado: ascendente; otro clic en la misma columna lo invierte."""
+        self._confirmar_edicion_en_curso()
+        anterior = getattr(self, '_orden_actual', None)
+        descendente = bool(anterior and anterior[0] == clave and not anterior[1])
+        self.ordenar_por(clave, descendente)
 
     # ---------------------------------------------------------
     def _recolectar_datos_actuales(self):

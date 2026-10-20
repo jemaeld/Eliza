@@ -49,3 +49,14 @@
 - Se retiró la pregunta de contraseña al abrir el primer VNC.
 - Limitación: filtra el uso casual. Quien modifique el código o lea
   `eliza_config.json` puede saltarla.
+
+## v2.3.2: ordenar en /edit
+
+- Botón **Ordenar A-Z** en el editor (`/edit vnc`, `/edit apps`, `/edit acd`):
+  ordena por nombre.
+- Clic en cualquier encabezado ordena por esa columna; otro clic invierte
+  el orden (▲/▼).
+- Orden natural: los números se comparan como números (L31E5 antes que
+  L31E25, 10.140.126.9 antes que 10.140.126.10).
+- El orden se guarda en el JSON con Ctrl+S, y así queda también en el
+  autocompletado.
