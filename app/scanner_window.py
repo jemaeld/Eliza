@@ -212,7 +212,8 @@ class ScannerWindow:
         accion = "actualizó" if reemplazada else "agregó"
         messagebox.showinfo(
             "Éxito",
-            f"Se {accion} la entrada '{entry['name']}' en la base de datos ACD.",
+            f"Se {accion} la entrada '{entry['name']}' en la base de datos ACD.\n\n"
+            f"Archivo guardado en:\n{acd_tools.resolver_ruta_action(entry['action'], self.base_dir)}",
             parent=self.window
         )
 
